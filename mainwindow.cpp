@@ -29,6 +29,9 @@
 #include <QSettings>
 #include <QTranslator>
 #include <QCoreApplication>
+#include <QFile>
+#include <QDir>
+#include <QDateTime>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -470,6 +473,7 @@ void MainWindow::onAsrStop()
     if (m_asrEngine && m_asrEngine->isAvailable()) {
         m_asrEngine->stop();
     }
+    saveLastRecordingAsWav();
     if (m_labelStatus)
         m_labelStatus->setText(tr("Listening stopped."));
 }
@@ -618,6 +622,9 @@ bool MainWindow::startMicrophoneCapture()
         return false;
     }
 
+    m_actualAudioSampleRate = m_audioInput->format().sampleRate();
+    m_recordedPcm16.clear();
+
     connect(m_audioInputDevice, &QIODevice::readyRead, this, &MainWindow::onMicAudioReadyRead);
     m_listening = true;
 
@@ -645,6 +652,8 @@ void MainWindow::onMicAudioReadyRead()
     const QByteArray chunk = m_audioInputDevice->readAll();
     if (chunk.isEmpty())
         return;
+    // Store raw PCM so you can inspect what VAD/ASR saw (written as WAV on stop).
+    m_recordedPcm16.append(chunk);
     if (m_asrEngine)
         m_asrEngine->acceptAudioChunkPcm16(chunk, m_audioSampleRate);
 }
@@ -652,6 +661,68 @@ void MainWindow::onMicAudioReadyRead()
 void MainWindow::finalizeCurrentSentence()
 {
     // Segmentation is now handled by AsrEngine VAD.
+}
+
+void MainWindow::saveLastRecordingAsWav()
+{
+    if (m_recordedPcm16.isEmpty())
+        return;
+
+    const QString dirPath = QCoreApplication::applicationDirPath() + QStringLiteral("/recordings");
+    QDir().mkpath(dirPath);
+
+    const QString fileName = QStringLiteral("recording_%1.wav")
+                                  .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+    const QString filePath = dirPath + QStringLiteral("/") + fileName;
+
+    QFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+
+    // WAV header for PCM 16-bit mono, little-endian.
+    const quint32 sampleRate = static_cast<quint32>(m_actualAudioSampleRate > 0 ? m_actualAudioSampleRate : m_audioSampleRate);
+    const quint16 numChannels = 1;
+    const quint16 bitsPerSample = 16;
+    const quint32 byteRate = sampleRate * numChannels * bitsPerSample / 8;
+    const quint16 blockAlign = numChannels * bitsPerSample / 8;
+    const quint32 dataSize = static_cast<quint32>(m_recordedPcm16.size());
+
+    auto writeLE16 = [&](quint16 v) {
+        const char b[2] = { static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF) };
+        f.write(b, 2);
+    };
+    auto writeLE32 = [&](quint32 v) {
+        const char b[4] = {
+            static_cast<char>(v & 0xFF),
+            static_cast<char>((v >> 8) & 0xFF),
+            static_cast<char>((v >> 16) & 0xFF),
+            static_cast<char>((v >> 24) & 0xFF),
+        };
+        f.write(b, 4);
+    };
+
+    // RIFF descriptor
+    f.write("RIFF", 4);
+    writeLE32(36 + dataSize); // file size minus 8 bytes
+    f.write("WAVE", 4);
+
+    // fmt sub-chunk
+    f.write("fmt ", 4);
+    writeLE32(16);            // PCM fmt chunk size
+    writeLE16(1);             // Audio format: 1 = PCM
+    writeLE16(numChannels);
+    writeLE32(sampleRate);
+    writeLE32(byteRate);
+    writeLE16(blockAlign);
+    writeLE16(bitsPerSample);
+
+    // data sub-chunk
+    f.write("data", 4);
+    writeLE32(dataSize);
+    f.write(m_recordedPcm16.constData(), static_cast<qint64>(m_recordedPcm16.size()));
+
+    if (m_labelStatus)
+        m_labelStatus->setText(tr("Listening stopped. Saved: %1").arg(filePath));
 }
 
 void MainWindow::sendTextToFocusedWindow(const QString &text)

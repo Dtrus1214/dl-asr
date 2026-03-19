@@ -69,6 +69,7 @@ private slots:
 private:
     void onAsrTranscribe();
     void onAsrStop();
+    void saveLastRecordingAsWav();
     void setupUiDynamic();
     void setupWindowFrame();
     void setupTrayIcon();
@@ -96,6 +97,8 @@ private:
     QIODevice *m_audioInputDevice = nullptr;
     bool m_listening = false;
     int m_audioSampleRate = 16000;
+    int m_actualAudioSampleRate = 16000;
+    QByteArray m_recordedPcm16;
     CustomButton *m_btnListen = nullptr;
 
     QPoint m_dragPosition;

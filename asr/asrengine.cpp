@@ -220,17 +220,17 @@ QString AsrEngine::defaultModelPath() const
 
 QString AsrEngine::defaultEncoderPath() const
 {
-    return QCoreApplication::applicationDirPath() + QLatin1String("/asr-model/encoder.int8.onnx");
+    return QCoreApplication::applicationDirPath() + QLatin1String("/asr-model/encoder.onnx");
 }
 
 QString AsrEngine::defaultDecoderPath() const
 {
-    return QCoreApplication::applicationDirPath() + QLatin1String("/asr-model/decoder.int8.onnx");
+    return QCoreApplication::applicationDirPath() + QLatin1String("/asr-model/decoder.onnx");
 }
 
 QString AsrEngine::defaultJoinerPath() const
 {
-    return QCoreApplication::applicationDirPath() + QLatin1String("/asr-model/joiner.int8.onnx");
+    return QCoreApplication::applicationDirPath() + QLatin1String("/asr-model/joiner.onnx");
 }
 
 QString AsrEngine::defaultTokensPath() const
