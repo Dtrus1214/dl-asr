@@ -32,6 +32,8 @@
 #include <QFile>
 #include <QDir>
 #include <QDateTime>
+#include <QProgressBar>
+#include <cmath>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -58,6 +60,26 @@
 static const int TITLE_BAR_HEIGHT = 40;
 static const int WINDOW_RADIUS = 14;
 static const int CONTENT_PADDING = 14;
+
+namespace {
+
+/** Peak sample magnitude in [0, 1] for mono s16le PCM. */
+float pcm16PeakLinear(const QByteArray &pcm16Mono)
+{
+    const int sampleCount = pcm16Mono.size() / static_cast<int>(sizeof(qint16));
+    if (sampleCount <= 0)
+        return 0.f;
+    const qint16 *p = reinterpret_cast<const qint16 *>(pcm16Mono.constData());
+    int peak = 0;
+    for (int i = 0; i < sampleCount; ++i) {
+        const int v = qAbs(static_cast<int>(p[i]));
+        if (v > peak)
+            peak = v;
+    }
+    return static_cast<float>(peak) / 32768.0f;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -138,6 +160,8 @@ void MainWindow::retranslateUi()
         m_settingsAction->setText(tr("Settings..."));
     if (m_quitAction)
         m_quitAction->setText(tr("Quit"));
+    if (m_inputLevelBar)
+        m_inputLevelBar->setToolTip(tr("Microphone level (while listening)"));
     if (m_asrEngine)
         onAsrStateChanged(m_asrEngine->state());
 
@@ -202,6 +226,18 @@ void MainWindow::setupUiDynamic()
     m_btnListen->setIconPath(QStringLiteral(":/icons/microphone.svg"));
     m_btnListen->setToolTip(tr("Start listening"));
     asrLayout->addWidget(m_btnListen);
+
+    m_inputLevelBar = new QProgressBar(content);
+    m_inputLevelBar->setObjectName(QStringLiteral("micLevelBar"));
+    m_inputLevelBar->setRange(0, 100);
+    m_inputLevelBar->setValue(0);
+    m_inputLevelBar->setTextVisible(false);
+    m_inputLevelBar->setFixedHeight(10);
+    m_inputLevelBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_inputLevelBar->setVisible(false);
+    m_inputLevelBar->setToolTip(tr("Microphone level (while listening)"));
+    asrLayout->addWidget(m_inputLevelBar, 1);
+
     contentLayout->addLayout(asrLayout);
 
     m_labelStatus = new QLabel(tr("Idle"), content);
@@ -250,6 +286,18 @@ void MainWindow::setupWindowFrame()
         QLabel#labelStatus {
             color: #4d6580;
             font-size: 11px;
+        }
+        QProgressBar#micLevelBar {
+            border: 1px solid #d0e4ff;
+            border-radius: 5px;
+            background-color: #ffffff;
+            min-height: 10px;
+            max-height: 10px;
+        }
+        QProgressBar#micLevelBar::chunk {
+            border-radius: 4px;
+            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #a8dcff, stop:0.55 #4aa3ff, stop:1 #2b7fd4);
         }
         QPlainTextEdit#textSelected {
             background-color: #ffffff;
@@ -628,6 +676,12 @@ bool MainWindow::startMicrophoneCapture()
     connect(m_audioInputDevice, &QIODevice::readyRead, this, &MainWindow::onMicAudioReadyRead);
     m_listening = true;
 
+    m_inputLevelSmoothed = 0.f;
+    if (m_inputLevelBar) {
+        m_inputLevelBar->setValue(0);
+        m_inputLevelBar->setVisible(true);
+    }
+
     if (m_labelStatus)
         m_labelStatus->setText(tr("Listening... Speak now."));
     return true;
@@ -636,6 +690,11 @@ bool MainWindow::startMicrophoneCapture()
 void MainWindow::stopMicrophoneCapture()
 {
     m_listening = false;
+    m_inputLevelSmoothed = 0.f;
+    if (m_inputLevelBar) {
+        m_inputLevelBar->setValue(0);
+        m_inputLevelBar->setVisible(false);
+    }
     if (m_audioInput) {
         m_audioInput->stop();
         m_audioInput->deleteLater();
@@ -654,6 +713,7 @@ void MainWindow::onMicAudioReadyRead()
         return;
     // Store raw PCM so you can inspect what VAD/ASR saw (written as WAV on stop).
     m_recordedPcm16.append(chunk);
+    updateInputLevelFromPcm(chunk);
     if (m_asrEngine)
         m_asrEngine->acceptAudioChunkPcm16(chunk, m_audioSampleRate);
 }
@@ -661,6 +721,27 @@ void MainWindow::onMicAudioReadyRead()
 void MainWindow::finalizeCurrentSentence()
 {
     // Segmentation is now handled by AsrEngine VAD.
+}
+
+void MainWindow::updateInputLevelFromPcm(const QByteArray &pcm16Mono)
+{
+    if (!m_inputLevelBar || !m_listening)
+        return;
+
+    const float peakLinear = pcm16PeakLinear(pcm16Mono);
+    // Slightly compress dynamic range so speech is easier to read on a short bar.
+    const float instant = std::sqrt(peakLinear);
+
+    // Fast attack, slow release — stable meter without sluggish response.
+    constexpr float attackBlend = 0.55f;
+    constexpr float releaseBlend = 0.88f;
+    if (instant > m_inputLevelSmoothed)
+        m_inputLevelSmoothed = m_inputLevelSmoothed * (1.f - attackBlend) + instant * attackBlend;
+    else
+        m_inputLevelSmoothed = m_inputLevelSmoothed * releaseBlend + instant * (1.f - releaseBlend);
+
+    const int display = qBound(0, static_cast<int>(m_inputLevelSmoothed * 100.f + 0.5f), 100);
+    m_inputLevelBar->setValue(display);
 }
 
 void MainWindow::saveLastRecordingAsWav()

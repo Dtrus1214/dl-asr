@@ -17,6 +17,7 @@ class QLabel;
 class QPlainTextEdit;
 class QVBoxLayout;
 class QHBoxLayout;
+class QProgressBar;
 class QMouseEvent;
 class QCloseEvent;
 class QShowEvent;
@@ -83,6 +84,7 @@ private:
     bool startMicrophoneCapture();
     void stopMicrophoneCapture();
     void finalizeCurrentSentence();
+    void updateInputLevelFromPcm(const QByteArray &pcm16Mono);
     void sendTextToFocusedWindow(const QString &text);
 
     QWidget *m_centralWidget = nullptr;
@@ -91,6 +93,8 @@ private:
     CustomButton *m_btnClose = nullptr;
     CustomButton *m_btnSettings = nullptr;
     QLabel *m_labelStatus = nullptr;
+    QProgressBar *m_inputLevelBar = nullptr;
+    float m_inputLevelSmoothed = 0.f;
 
     AsrEngine *m_asrEngine = nullptr;
     QAudioInput *m_audioInput = nullptr;
